@@ -72,14 +72,18 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Lovable App" },
-      { name: "description", content: "Lovable Generated Project" },
+      { title: "YouDraw" },
+      { name: "description", content: "A multiplayer game for guessing what another person has drawn." },
       { name: "author", content: "Lovable" },
-      { property: "og:title", content: "Lovable App" },
-      { property: "og:description", content: "Lovable Generated Project" },
+      { property: "og:title", content: "YouDraw" },
+      { property: "og:description", content: "A multiplayer game for guessing what another person has drawn." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
       { name: "twitter:site", content: "@Lovable" },
+      { name: "twitter:title", content: "YouDraw" },
+      { name: "twitter:description", content: "A multiplayer game for guessing what another person has drawn." },
+      { property: "og:image", content: "https://storage.googleapis.com/gpt-engineer-file-uploads/z6bYuqO8PofsEBNyhaKZrd97HmH3/social-images/social-1779777069931-qwen-image-2.0-pro-2026-04-22_a_i_have_created_a_gam.webp" },
+      { name: "twitter:image", content: "https://storage.googleapis.com/gpt-engineer-file-uploads/z6bYuqO8PofsEBNyhaKZrd97HmH3/social-images/social-1779777069931-qwen-image-2.0-pro-2026-04-22_a_i_have_created_a_gam.webp" },
     ],
     links: [
       {
