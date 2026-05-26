@@ -539,11 +539,6 @@ export function Game({ roomCode, playerId, playerName, onLeave }: {
           </aside>
         </div>
 
-        <PickWordRelay
-          isHost={isHost}
-          channel={channelRef.current}
-          onPicked={(word) => hostStartDrawing(word)}
-        />
       </div>
     </div>
   );
@@ -580,18 +575,3 @@ function ChatList({ chat }: { chat: ChatMsg[] }) {
   );
 }
 
-function PickWordRelay({ isHost, channel, onPicked }: {
-  isHost: boolean;
-  channel: RealtimeChannel | null;
-  onPicked: (word: string) => void;
-}) {
-  useEffect(() => {
-    if (!isHost || !channel) return;
-    const sub = channel.on("broadcast", { event: "pick_word" }, ({ payload }) => {
-      const p = payload as { word: string };
-      onPicked(p.word);
-    });
-    return () => { void sub; };
-  }, [isHost, channel, onPicked]);
-  return null;
-}
