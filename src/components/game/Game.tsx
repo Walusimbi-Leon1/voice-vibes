@@ -318,6 +318,12 @@ export function Game({ roomCode, playerId, playerName, onLeave }: {
       if (isHostRef.current) broadcastState(stateRef.current);
     });
 
+    channel.on("broadcast", { event: "pick_word" }, ({ payload }) => {
+      if (!isHostRef.current) return;
+      const p = payload as { word: string };
+      hostStartDrawing(p.word);
+    });
+
     channel.subscribe(async (status) => {
       if (status === "SUBSCRIBED") {
         await channel.track({ name: playerName, color: playerColor });
