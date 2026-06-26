@@ -11,7 +11,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "deploy:cf": "npm run build && npx wrangler deploy",
-    "deploy:pages": "NITRO_PRESET=cloudflare-pages npm run build && npx wrangler pages deploy dist/client"
+    "deploy:pages": "npm run build && npx wrangler pages deploy dist/"
   },
   "dependencies": {
     "@cloudflare/vite-plugin": "^1.25.5",

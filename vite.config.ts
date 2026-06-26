@@ -4,9 +4,8 @@ export default defineConfig({
   tanstackStart: {
     server: { entry: "server" },
   },
-  // Force-enable Nitro deploy plugin (default: cloudflare-module preset)
-  // Required for production builds outside the Lovable sandbox.
+  // Force-enable Nitro deploy plugin for Cloudflare Pages
   nitro: {
-    preset: "cloudflare-module",
+    preset: "cloudflare-pages",
   },
 });
