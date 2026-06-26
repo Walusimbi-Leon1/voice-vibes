@@ -118,4 +118,4 @@ src/
 
 ## 📄 License
 
-Private — SKSS
+Private — SGSS
