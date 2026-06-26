@@ -7,6 +7,13 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Environment Variables
+.env
+.env.local
+.env.development
+.env.production
+
+# Build output
 node_modules
 dist
 dist-ssr
@@ -19,6 +26,12 @@ dist-ssr
 # Wrangler / Cloudflare
 .wrangler/
 .dev.vars
+
+# Lovable AI auto-generated (template metadata, not needed for deployment)
+.lovable/
+
+# Supabase local
+supabase/.temp/
 
 # Editor directories and files
 .vscode/*
