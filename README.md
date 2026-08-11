@@ -1,120 +1,94 @@
-# 🎨 Voice Vibes (YouDraw)
+# 🎨 Voice Vibes — Global Draw & Guess
 
-> A real-time multiplayer Pictionary / drawing game for Discord Activities and the browser.
+> **The whole world plays in ONE room.** Draw, guess, and climb the persistent leaderboard with players from every Discord server — no invites, no room codes, no waiting for friends.
 
-Draw, guess, and race the clock in a battle of creativity and speed. Up to 10 players per room. 3 rounds of drawing and guessing with speed-based scoring.
+A real-time global Pictionary game for **Discord Activities** and the browser, built with the proven Bible Trivia architecture: everything same-origin through a Cloudflare Worker, so it runs inside Discord's Activity sandbox with zero configuration.
 
-## 🎮 How It Works
+## 🌍 How the Global Room Works
 
-1. **Create or join a room** — share the 5-character room code with friends
-2. **Drawer picks a word** — 3 random choices (pizza, dragon, castle, ninja, etc.)
-3. **Drawer draws on the canvas** while everyone guesses
-4. **Speed bonus scoring** — guess faster = more points. Drawer also earns points when someone guesses correctly
-5. **3 rounds** — 70 seconds per turn. Top scorer wins!
+- **One arena for everyone.** There are no rooms or codes — every player online is in the same game.
+- **Turns run themselves.** Turn *n* starts at `anchor + n × 70s`, and the drawer is chosen deterministically: `sortedOnline[n % playerCount]`. No host, no "Start" button.
+- **Join anytime, even alone.** If the arena is empty for an hour, the clock restarts on your join — you instantly become the drawer of a fresh turn, and others who join mid-turn guess your drawing.
+- **Persistent leaderboard.** Scores are server-authoritative (the worker validates every guess and awards points — no client-side cheating) and stored forever in Firebase. Your Discord identity carries your score across every server and session.
+- **Speed scoring.** Guess faster = more points (up to 200). The drawer earns +25 per correct guess.
 
-Play inside a Discord voice channel as an Activity, or directly in your browser.
+## 🎮 Game Flow
 
-## ✨ Features
-
-- 🖌️ **Real-time drawing canvas** — smooth pointer-based drawing with color picker, brush sizes, and eraser
-- 🧠 **Speed-based scoring** — faster guesses earn more points (up to 200 points per correct guess)
-- 👥 **Up to 10 players** per room with live presence tracking
-- 🏆 **Live leaderboard** — see scores update in real-time
-- 💬 **In-game chat** — guess and chat alongside the action
-- 🎧 **Discord Activities** — play directly inside a voice channel
-- 🌐 **Browser support** — works as a standalone web app too
+1. Turn starts → the drawer gets 3 word choices (15s to pick, auto-picked if AFK).
+2. Drawer draws on the canvas while everyone guesses in real time.
+3. First correct guess scores most; when everyone's guessed (or 70s is up) the word is revealed.
+4. Next turn starts automatically. Score totals roll into the global leaderboard.
 
 ## 🛠️ Tech Stack
 
-- **React 19 + TypeScript**
-- **TanStack Start** (React Router framework + SSR)
-- **Supabase** (real-time presence, broadcast, and database)
-- **Discord Embedded App SDK** (Discord Activities integration)
-- **Cloudflare Workers** (deployment server)
-- **Tailwind CSS v4 + shadcn/ui** (styling)
+- **Cloudflare Workers** — serves everything: static assets, Discord OAuth exchange, game API, Firebase proxy
+- **Firebase Realtime Database** — shared global state (same public-writable DB as Bible Trivia, isolated `vibes/global` namespace)
+- **Discord Embedded App SDK 2.5.0** — vendored same-origin (Discord's sandbox blocks external CDNs)
+- **Vanilla JS** — zero build dependencies, ~200 KB total
 
-## 🚀 Deployment
-
-### Cloudflare Workers
+## 🚀 Deploy
 
 ```bash
-# Build & deploy to Cloudflare Workers
-npm run deploy:cf
+# 1. Build (inlines src/* into dist/worker.js)
+node build.js
+
+# 2. Deploy with secrets from environment (never committed)
+CF_API_TOKEN=... \
+DISCORD_CLIENT_ID=1333998470524768276 \
+DISCORD_CLIENT_SECRET=... \
+bash deploy.sh
 ```
 
-### Cloudflare Pages
+Live: **https://voice-vibes.walusimbileon2.workers.dev**
 
-```bash
-# Build & deploy to Cloudflare Pages
-npm run deploy:pages
-```
+### Environment / Secrets
 
-### Environment Variables
+| Variable | Where | Description |
+|---|---|---|
+| `DISCORD_CLIENT_ID` | deploy.sh env → worker var | Discord Application ID (public) |
+| `DISCORD_CLIENT_SECRET` | deploy.sh env → worker **secret** | Discord App Secret (private) |
+| `REDIRECT_URI` | deploy.sh (auto) | Must match Developer Portal exactly |
+| `FB_HOST` | deploy.sh (auto) | Firebase RTDB host |
 
-Set these in your Cloudflare dashboard (Workers & Pages → your project → Settings → Variables):
+## 🎧 Adding to Discord (Developer Portal)
 
-| Variable | Description |
-|---|---|
-| `SUPABASE_URL` | Your Supabase project URL |
-| `SUPABASE_PUBLISHABLE_KEY` | Your Supabase anon/public key |
-| `VITE_SUPABASE_URL` | Same as SUPABASE_URL (client-side) |
-| `VITE_SUPABASE_PUBLISHABLE_KEY` | Same as SUPABASE_PUBLISHABLE_KEY (client-side) |
-| `VITE_SUPABASE_PROJECT_ID` | Your Supabase project ID |
-| `VITE_DISCORD_CLIENT_ID` | (Optional) Your Discord app client ID for Activities |
+1. Go to **https://discord.com/developers/applications** → **New Application** → name it **Voice Vibes**.
+2. **General Information** → set the icon/banner, and add these links (required for listing):
+   - **Terms of Service URL:** `https://voice-vibes.walusimbileon2.workers.dev/terms`
+   - **Privacy Policy URL:** `https://voice-vibes.walusimbileon2.workers.dev/privacy`
+   - **Support/Developer link:** `https://walusimbi-leon1.github.io/voice-support/`
+3. **OAuth2** → add a redirect: `https://voice-vibes.walusimbileon2.workers.dev` (exact, no trailing slash).
+4. **General Information → Links → Activity URL:** `https://voice-vibes.walusimbileon2.workers.dev/`
+5. Copy the **Application ID** (client ID) and **Client Secret** → deploy with them as env vars.
+6. In a server: **voice channel → Activities (🎮) → Voice Vibes** — or use the "Try it out" button on the app page.
 
-> **Note:** The Supabase anon key is safe to expose — it's sent to every browser. Real security comes from Supabase Row-Level Security (RLS) policies.
+The game works with **no socket/domain configuration** — the sandbox only ever talks to its own origin, so no Developer Portal network settings are needed.
 
-## 🧪 Development
-
-```bash
-# Install dependencies
-npm install
-
-# Start dev server
-npm run dev
-
-# Build for production
-npm run build
-
-# Preview production build
-npm run preview
-```
-
-## 🏗️ Project Structure
+## 📁 Project Structure
 
 ```
-src/
-├── components/
-│   ├── game/
-│   │   ├── Game.tsx        # Main game logic & UI
-│   │   └── Canvas.tsx      # Drawing canvas component
-│   └── ui/                 # shadcn/ui components
-├── integrations/
-│   └── supabase/
-│       ├── client.ts       # Supabase client (browser)
-│       ├── client.server.ts # Supabase admin client (server-only)
-│       ├── auth-middleware.ts
-│       └── auth-attacher.ts
-├── lib/
-│   ├── discord.ts          # Discord SDK integration
-│   ├── words.ts            # Word list for the game
-│   └── error-capture.ts    # SSR error handling
-├── routes/
-│   ├── __root.tsx          # Root layout with meta tags
-│   └── index.tsx           # Home page & lobby
-├── server.ts               # Cloudflare Workers entry point
-└── start.ts                # TanStack Start configuration
+├── worker.js            # Cloudflare Worker: assets, /api/*, /firebase proxy
+├── build.js             # inlines src/* → dist/worker.js (static map)
+├── deploy.sh            # uploads worker + sets secrets via API
+├── wrangler.toml        # config reference (vars documented above)
+└── src/
+    ├── index.html       # game UI
+    ├── style.css
+    ├── app.js           # global game engine (deterministic time-sliced turns)
+    ├── canvas.js        # drawing canvas (pointer → logical coords → strokes)
+    ├── discord.js       # Discord SDK integration (Bible Trivia pattern)
+    ├── firebase.js      # /firebase proxy client (REST + SSE)
+    ├── support.js       # external-link opener (openExternalLink in Discord)
+    ├── words.js         # word list
+    ├── privacy.html / terms.html
+    └── vendor/discord-sdk.mjs  # vendored @discord/embedded-app-sdk@2.5.0
 ```
-
-## 📝 Word List
-
-80+ fun words spanning categories like food, animals, objects, fantasy, and more — randomized each game.
 
 ## 🔒 Security
 
-- Supabase service role key is NEVER in the repo — set via Cloudflare Workers secrets
-- Discord SDK initialization is optional and fails gracefully
-- Real-time game state is managed server-side via Supabase Realtime
+- `DISCORD_CLIENT_SECRET` never touches the repo — set via deploy.sh from the environment as an encrypted Worker secret.
+- Scoring is **server-authoritative**: only the worker writes words, guesses, and scores.
+- All game traffic flows through the same-origin `/firebase` proxy (Discord sandbox blocks direct firebaseio.com calls).
 
 ## 📄 License
 

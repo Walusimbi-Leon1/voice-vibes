@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>🎨 Voice Vibes — Global Draw &amp; Guess</title>
+<meta name="description" content="Voice Vibes — the global Pictionary room. Draw, guess, and climb the persistent leaderboard with players from every Discord server.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎨</text></svg>">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <h1 class="logo">🎨 Voice <span class="logo-elite">Vibes</span></h1>
+      <div id="header-me" class="me-chip"></div>
+    </div>
+  </header>
+
+  <main class="container">
+
+    <!-- Loading -->
+    <section id="screen-loading" class="screen">
+      <div class="center-box">
+        <div class="spinner big"></div>
+        <p class="muted" id="loading-msg">Connecting to the global arena…</p>
+      </div>
+    </section>
+
+    <!-- Error -->
+    <section id="screen-error" class="screen hidden">
+      <div class="center-box card">
+        <h2>⚠️ Something went wrong</h2>
+        <p class="muted" id="error-msg"></p>
+        <button id="btn-retry" class="btn btn-primary">Retry</button>
+      </div>
+    </section>
+
+    <!-- Game -->
+    <section id="screen-game" class="screen hidden">
+      <div class="game-grid">
+
+        <div class="column main-col">
+          <div class="status-card">
+            <div id="status-box"></div>
+          </div>
+
+          <div class="timer-wrap">
+            <div class="timer-track"><div id="q-progress" class="timer-fill"></div></div>
+            <div class="timer-label">
+              <span id="turn-label" class="turn-label">Turn 1</span>
+              <span id="q-time" class="q-time">70s</span>
+            </div>
+          </div>
+
+          <div id="canvas-host" class="canvas-host"></div>
+
+          <div id="q-result" class="result-box hidden"></div>
+        </div>
+
+        <aside class="column side-col">
+          <div class="card lb-card">
+            <h3 class="card-title">🏆 Global Leaderboard</h3>
+            <div id="lb-list"></div>
+            <p id="my-rank" class="muted small my-rank-line"></p>
+          </div>
+        </aside>
+
+        <aside class="column chat-col">
+          <div class="card chat-card">
+            <h3 class="card-title">💬 Guesses &amp; Chat</h3>
+            <div id="chat-list" class="chat-list"></div>
+            <form id="guess-form" class="guess-form">
+              <input id="guess-input" class="guess-input" placeholder="Type your guess…" maxlength="60" autocomplete="off" />
+              <button type="submit" class="btn btn-primary btn-sm">Send</button>
+            </form>
+          </div>
+        </aside>
+
+      </div>
+      <p class="arena-note muted small">🌍 One global room — everyone online plays together. Draw, guess, and rank up! · <a class="sgss-link" href="https://walusimbi-leon1.github.io/sgss-bible/" target="_blank" rel="noopener">SGSS</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a class="support-link" href="https://walusimbi-leon1.github.io/voice-support/" target="_blank" rel="noopener">💛 Support Developer</a></p>
+    </section>
+
+  </main>
+
+  <script type="module" src="/app.js"></script>
+  <script type="module" src="/support.js"></script>
+</body>
+</html>
