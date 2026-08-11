@@ -1,85 +1,98 @@
-# 🎨 Voice Vibes — Global Draw & Guess
+# 🎨 Voice Vibes — The Bot Draws, You Guess
 
-> **The whole world plays in ONE room.** Draw, guess, and climb the persistent leaderboard with players from every Discord server — no invites, no room codes, no waiting for friends.
+> **One global room. A bot that draws. Everyone on Earth guessing together.**
+> No rooms, no codes, no waiting for friends — open the game and you're instantly in the world's biggest Pictionary match.
 
-A real-time global Pictionary game for **Discord Activities** and the browser, built with the proven Bible Trivia architecture: everything same-origin through a Cloudflare Worker, so it runs inside Discord's Activity sandbox with zero configuration.
+Voice Vibes is a real-time **"bot draws, you guess"** game for **Discord Activities** and the browser. A friendly bot draws a new picture every 70 seconds — stroke by stroke, live on your screen — and you race players from every Discord server to guess it first. Wrong guesses are just chat noise; right guesses score points that stack onto a **permanent global leaderboard**.
 
-## 🌍 How the Global Room Works
+## 🌍 How It Works
 
-- **One arena for everyone.** There are no rooms or codes — every player online is in the same game.
-- **Turns run themselves.** Turn *n* starts at `anchor + n × 70s`, and the drawer is chosen deterministically: `sortedOnline[n % playerCount]`. No host, no "Start" button.
-- **Join anytime, even alone.** If the arena is empty for an hour, the clock restarts on your join — you instantly become the drawer of a fresh turn, and others who join mid-turn guess your drawing.
-- **Persistent leaderboard.** Scores are server-authoritative (the worker validates every guess and awards points — no client-side cheating) and stored forever in Firebase. Your Discord identity carries your score across every server and session.
-- **Speed scoring.** Guess faster = more points (up to 200). The drawer earns +25 per correct guess.
+- **One arena for everyone.** Every player online — from every server, in every timezone — shares the same turn, the same drawing, the same leaderboard.
+- **The bot is the artist.** The worker picks a word each turn and the drawing is revealed progressively on everyone's canvas at the same pace. A 🖌️ pen draws real strokes, just like a person would.
+- **Turns run themselves.** Turn *n* starts at `anchor + n × 70s`. No host, no start button, join or leave anytime.
+- **Join anytime, even alone.** The bot draws for you solo; others drop in mid-turn and guess alongside you.
+- **Speed scoring.** First correct guess scores up to 200 points, scaling down as the turn progresses. The persistent leaderboard never resets.
+- **Fair hints.** At 35s the bot reveals the first letter; at 50s, the second. Late guesses still score.
+- **Server-authoritative.** Every guess is validated by the worker — no client-side score hacking. Scores persist forever in Firebase.
 
 ## 🎮 Game Flow
 
-1. Turn starts → the drawer gets 3 word choices (15s to pick, auto-picked if AFK).
-2. Drawer draws on the canvas while everyone guesses in real time.
-3. First correct guess scores most; when everyone's guessed (or 70s is up) the word is revealed.
-4. Next turn starts automatically. Score totals roll into the global leaderboard.
+1. Turn starts → the bot "thinks" for a second, then starts drawing.
+2. The picture emerges stroke-by-stroke over ~55 seconds while everyone types guesses.
+3. Guess right → speed points + a "✅ got it" badge (you're out of that round).
+4. Everyone guessed (or time's up) → the word is revealed, 8s breather, next drawing.
+5. Scores roll into the global leaderboard permanently.
 
 ## 🛠️ Tech Stack
 
 - **Cloudflare Workers** — serves everything: static assets, Discord OAuth exchange, game API, Firebase proxy
-- **Firebase Realtime Database** — shared global state (same public-writable DB as Bible Trivia, isolated `vibes/global` namespace)
+- **Firebase Realtime Database** — shared global state (public-writable DB, isolated `vibes/global` namespace)
 - **Discord Embedded App SDK 2.5.0** — vendored same-origin (Discord's sandbox blocks external CDNs)
-- **Vanilla JS** — zero build dependencies, ~200 KB total
+- **100 hand-crafted vector drawings** — the bot's art gallery, rendered with progressive stroke animation
+- **Vanilla JS, zero build dependencies** — ~450 KB total
 
-## 🚀 Deploy
+## 🎧 Adding to Discord
+
+The game is already deployed and running:
+
+**Live URL:** https://voice-vibes.walusimbileon2.workers.dev
+**Discord Application ID:** `1536606953835470859`
+
+### Developer Portal setup (one-time)
+
+1. Go to **https://discord.com/developers/applications** → the **Voice Vibes** app.
+2. **General Information**:
+   - **Terms of Service URL:** `https://voice-vibes.walusimbileon2.workers.dev/terms`
+   - **Privacy Policy URL:** `https://voice-vibes.walusimbileon2.workers.dev/privacy`
+   - **Support/Developer link:** `https://walusimbi-leon1.github.io/voice-support/`
+3. **OAuth2** → add redirect: `https://voice-vibes.walusimbileon2.workers.dev` (exact, no trailing slash).
+4. **General Information → Links → Activity URL:** `https://voice-vibes.walusimbileon2.workers.dev/`
+5. Copy the **Client ID** and **Client Secret** for deployments.
+
+Then launch it in any server: **voice channel → Activities (🎮) → Voice Vibes**.
+
+> No socket or domain configuration is needed — the sandbox only ever talks to its own origin.
+
+## 🚀 Deploying
 
 ```bash
-# 1. Build (inlines src/* into dist/worker.js)
+# 1. Build (inlines src/* into dist/worker.js and injects the bot vocabulary)
 node build.js
 
-# 2. Deploy with secrets from environment (never committed)
-CF_API_TOKEN=... \
-DISCORD_CLIENT_ID=1333998470524768276 \
-DISCORD_CLIENT_SECRET=... \
+# 2. Deploy with secrets from environment (never committed to the repo)
+CF_API_TOKEN=*** \
+DISCORD_CLIENT_ID=1536606953835470859 \
+DISCORD_CLIENT_SECRET=*** \
 bash deploy.sh
 ```
-
-Live: **https://voice-vibes.walusimbileon2.workers.dev**
 
 ### Environment / Secrets
 
 | Variable | Where | Description |
 |---|---|---|
-| `DISCORD_CLIENT_ID` | deploy.sh env → worker var | Discord Application ID (public) |
-| `DISCORD_CLIENT_SECRET` | deploy.sh env → worker **secret** | Discord App Secret (private) |
-| `REDIRECT_URI` | deploy.sh (auto) | Must match Developer Portal exactly |
+| `DISCORD_CLIENT_ID` | deploy.sh env → worker var | Discord Application ID (public — `1536606953835470859`) |
+| `DISCORD_CLIENT_SECRET` | deploy.sh env → worker **secret** | Discord App Secret (private — never commit) |
+| `REDIRECT_URI` | deploy.sh (auto) | `https://voice-vibes.walusimbileon2.workers.dev` |
 | `FB_HOST` | deploy.sh (auto) | Firebase RTDB host |
 
-## 🎧 Adding to Discord (Developer Portal)
-
-1. Go to **https://discord.com/developers/applications** → **New Application** → name it **Voice Vibes**.
-2. **General Information** → set the icon/banner, and add these links (required for listing):
-   - **Terms of Service URL:** `https://voice-vibes.walusimbileon2.workers.dev/terms`
-   - **Privacy Policy URL:** `https://voice-vibes.walusimbileon2.workers.dev/privacy`
-   - **Support/Developer link:** `https://walusimbi-leon1.github.io/voice-support/`
-3. **OAuth2** → add a redirect: `https://voice-vibes.walusimbileon2.workers.dev` (exact, no trailing slash).
-4. **General Information → Links → Activity URL:** `https://voice-vibes.walusimbileon2.workers.dev/`
-5. Copy the **Application ID** (client ID) and **Client Secret** → deploy with them as env vars.
-6. In a server: **voice channel → Activities (🎮) → Voice Vibes** — or use the "Try it out" button on the app page.
-
-The game works with **no socket/domain configuration** — the sandbox only ever talks to its own origin, so no Developer Portal network settings are needed.
+Authorization URL (confidential OAuth flow): `https://discord.com/oauth2/authorize?client_id=1536606953835470859&response_type=code&redirect_uri=https%3A%2F%2Fvoice-vibes.walusimbileon2.workers.dev&scope=identify`
 
 ## 📁 Project Structure
 
 ```
 ├── worker.js            # Cloudflare Worker: assets, /api/*, /firebase proxy
-├── build.js             # inlines src/* → dist/worker.js (static map)
+├── build.js             # inlines src/* → dist/worker.js (static map + bot words)
 ├── deploy.sh            # uploads worker + sets secrets via API
 ├── wrangler.toml        # config reference (vars documented above)
 └── src/
     ├── index.html       # game UI
     ├── style.css
     ├── app.js           # global game engine (deterministic time-sliced turns)
-    ├── canvas.js        # drawing canvas (pointer → logical coords → strokes)
+    ├── canvas.js        # bot canvas renderer (progressive stroke reveal)
+    ├── drawings.js      # 🎨 100 vector drawings (the bot's art gallery)
     ├── discord.js       # Discord SDK integration (Bible Trivia pattern)
     ├── firebase.js      # /firebase proxy client (REST + SSE)
     ├── support.js       # external-link opener (openExternalLink in Discord)
-    ├── words.js         # word list
     ├── privacy.html / terms.html
     └── vendor/discord-sdk.mjs  # vendored @discord/embedded-app-sdk@2.5.0
 ```

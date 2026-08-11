@@ -151,6 +151,28 @@ html, body {
 .masked-word { color: var(--ink); }
 
 .choices { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 10px; }
+
+.hint-line {
+  margin-top: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #b45309;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 999px;
+  padding: 5px 14px;
+  display: inline-block;
+}
+.got-it {
+  margin-top: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #065f46;
+  background: #d1fae5;
+  border-radius: 999px;
+  padding: 5px 14px;
+  display: inline-block;
+}
 .choice-btn {
   background: var(--primary-soft);
   border: 2px solid var(--primary);
@@ -190,7 +212,7 @@ html, body {
 .turn-label { letter-spacing: 0.06em; text-transform: uppercase; }
 .q-time { color: var(--primary); font-variant-numeric: tabular-nums; }
 
-/* ── canvas ── */
+/* ── canvas (bot renders; users watch) ── */
 .canvas-host { margin-bottom: 10px; }
 .canvas-frame {
   position: relative;
@@ -201,29 +223,19 @@ html, body {
   overflow: hidden;
 }
 .draw-canvas { width: 100%; height: 100%; display: block; touch-action: none; }
-.canvas-tools { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
-.tool-row { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
-.swatch {
-  width: 26px; height: 26px;
-  border-radius: 50%;
-  border: 2px solid rgba(0, 0, 0, 0.12);
-  cursor: pointer;
-  transition: transform 0.12s ease, border-color 0.12s ease;
+.bot-badge {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  background: rgba(17, 24, 39, 0.72);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 4px 12px;
+  pointer-events: none;
+  z-index: 2;
 }
-.swatch.active { border-color: #111; transform: scale(1.18); }
-.size-dot { border-radius: 50%; background: #333; opacity: 0.45; cursor: pointer; border: none; }
-.size-dot.active { opacity: 1; transform: scale(1.2); }
-.tool-btn {
-  border: 1px solid var(--border);
-  background: #fff;
-  border-radius: 8px;
-  padding: 5px 12px;
-  font-size: 13px;
-  cursor: pointer;
-  font-weight: 600;
-}
-.tool-btn.active { background: var(--primary); border-color: var(--primary); color: #fff; }
-.tool-btn:hover { border-color: var(--primary); }
 
 /* ── side cards ── */
 .side-col .card, .chat-col .card { display: flex; flex-direction: column; }

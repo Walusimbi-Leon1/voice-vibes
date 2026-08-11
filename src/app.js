@@ -1,42 +1,43 @@
 /**
- * Voice Vibes — global Pictionary game engine.
+ * Voice Vibes — global "bot draws, you guess" game engine.
  *
  * GLOBAL ROOM MODEL (Bible Trivia pattern):
- *  - There is ONE room for everyone on the planet. No room codes.
+ *  - ONE room for everyone. No room codes, no host, no start button.
  *  - Turns are deterministic and time-sliced:
  *      turn N starts at  anchor + N * turnDuration
- *      drawer(N)        = sortedOnline[N % len]
- *    Every client computes the same turn/drawer from shared state — no
- *    host, no "start game" button.
- *  - The worker is the only writer of words/guesses/anchors, so scoring
- *    is server-authoritative and leaderboard scores persist forever.
- *  - Join anytime; if the arena is empty the worker restarts the clock so
- *    you instantly become the drawer of a fresh turn.
+ *    Every client computes the same turn from shared state.
+ *  - A BOT draws every picture. The worker picks the word at turn start
+ *    (lazily, on the first API call) and reveals it by drawing the vector
+ *    strokes progressively on every player's canvas.
+ *  - Scoring is server-authoritative via /api/guess: speed bonus up to
+ *    200 pts. Persistent leaderboard in Firebase RTDB.
  *
  * Data (RTDB via same-origin /firebase proxy):
- *  vibes/global/game              = { anchor, turnDuration, pickDuration, intermission, onlineWindow }
- *  vibes/global/words/<turn>      = "pizza"
+ *  vibes/global/game              = { anchor, turnDuration, intermission, onlineWindow }
+ *  vibes/global/words/<turn>      = word (the bot's pick — hidden in the UI)
  *  vibes/global/turns/<turn>      = { allGuessedAt?, guessed: {<uid>: true} }
- *  vibes/global/guesses/<turn>/<uid> = { text, at, correct }
- *  vibes/global/canvas/<turn>/strokes/<id> = { color, size, segments: [{from,to},...] }
+ *  vibes/global/guesses/<turn>/<uid> = { text, at, correct, points? }
  *  vibes/global/players/<uid>     = { id, username, avatarUrl, score, lastSeen, online, joinedAt }
  */
 
-import { initDiscord, isDiscord } from "./discord.js";
-import { dbRead, dbWrite, dbUpdate, dbDelete, dbWatch } from "./firebase.js";
-import { pickWords, maskWord } from "./words.js";
-import { createCanvas } from "./canvas.js";
+import { initDiscord } from "./discord.js";
+import { dbRead, dbUpdate, dbWatch } from "./firebase.js";
+import { DRAWINGS } from "./drawings.js";
+import { createBotCanvas } from "./canvas.js";
 
 const P = "vibes/global";
-const NS = "bible-game-21-default-rtdb";
 
 const GAME_DEFAULTS = {
   anchor: null,
   turnDuration: 70,
-  pickDuration: 15,
   intermission: 8,
   onlineWindow: 120,
 };
+
+const DRAW_START = 1.5; // seconds into the turn before the bot starts drawing
+const DRAW_END = 56; // drawing finishes (full picture + 14s to admire/guess)
+const HINT_1_AT = 35; // seconds: first-letter hint
+const HINT_2_AT = 50; // seconds: second-letter hint
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -76,29 +77,19 @@ async function resolveIdentity() {
 let game = { ...GAME_DEFAULTS };
 let players = {};
 let turnData = { N: -1, word: null, allGuessedAt: null, guessed: {}, guesses: {} };
-let words = {};        // word cache for nearby turns
-let offset = 0;        // server clock offset (ms)
-let clockOffsetKnown = false;
+let words = {};
+let offset = 0;
 let canvas = null;
-let appliedStrokes = new Set();
-let localStrokeIds = new Set();
-let strokeBuffer = [];
-let strokeFlushTimer = null;
-let autoPickPosted = false;
-let loadingTurn = false;
 let channels = [];
+let turnChannels = [];
 let phase = "loading";
-let wordChoices = null;
+let chatLog = [];
+let iGuessedTurn = -1;
+let ensurePosted = false;
+let lastDomUpdate = 0;
 
 function now() {
   return Date.now() + offset;
-}
-
-function sortedOnline() {
-  const cutoff = now() - (game.onlineWindow || 120) * 1000;
-  return Object.values(players)
-    .filter((p) => p && (p.lastSeen || 0) > cutoff)
-    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
 function currentTurn() {
@@ -110,43 +101,36 @@ function turnStart(N) {
   return game.anchor + N * game.turnDuration * 1000;
 }
 
-function drawerFor(N) {
-  const online = sortedOnline();
-  if (!online.length) return null;
-  return online[((N % online.length) + online.length) % online.length];
-}
-
 // ── phase derivation (deterministic, all clients) ───────────────────────────
 function computePhase() {
   const N = currentTurn();
-  if (N < 0) return { N, phase: "idle" };
+  if (N < 0) return { N, phase: "idle", timeLeft: 0 };
   const word = words[N] || null;
   const t = now() - turnStart(N);
   const T = game.turnDuration * 1000;
-  const pickMs = game.pickDuration * 1000;
   const allGuessedAt = turnData.N === N ? turnData.allGuessedAt : null;
 
   let phase;
-  if (!word && t < pickMs) phase = "picking";
+  if (!word && t < 4000) phase = "picking"; // bot "choosing" briefly
   else if (!word) phase = "picking-timeout";
   else if (allGuessedAt) phase = "intermission";
   else if (t < T) phase = "drawing";
   else phase = "intermission";
 
   let timeLeft = 0;
-  if (phase === "picking" || phase === "picking-timeout") timeLeft = Math.max(0, (pickMs - t) / 1000);
-  else if (phase === "drawing") {
+  if (phase === "drawing") {
     const end = allGuessedAt || turnStart(N) + T;
     timeLeft = Math.max(0, (end - now()) / 1000);
   } else if (phase === "intermission") {
     const end = turnStart(N + 1);
     timeLeft = Math.max(0, (end - now()) / 1000);
+  } else if (phase === "picking") {
+    timeLeft = Math.max(0, (4000 - t) / 1000);
   }
-
   return { N, phase, timeLeft, word, t, T };
 }
 
-// ── UI rendering ────────────────────────────────────────────────────────────
+// ── UI ──────────────────────────────────────────────────────────────────────
 function el(tag, cls, text) {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
@@ -173,19 +157,19 @@ function initials(name) {
   return (name || "?").trim().slice(0, 1).toUpperCase();
 }
 
+function hashColor(id) {
+  const palette = ["#ef4444", "#f59e0b", "#10b981", "#3b82f6", "#8b5cf6", "#ec4899", "#06b6d4", "#84cc16"];
+  let h = 0;
+  for (const c of id) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return palette[h % palette.length];
+}
+
 function avatarHtml(p, size) {
   const s = size || 30;
   if (p.avatarUrl) {
     return `<img class="avatar" style="width:${s}px;height:${s}px" src="${escapeHtml(p.avatarUrl)}" alt="">`;
   }
   return `<div class="avatar avatar-fallback" style="width:${s}px;height:${s}px;background:${hashColor(p.id)}">${escapeHtml(initials(p.username))}</div>`;
-}
-
-function hashColor(id) {
-  const palette = ["#ef4444", "#f59e0b", "#10b981", "#3b82f6", "#8b5cf6", "#ec4899", "#06b6d4", "#84cc16"];
-  let h = 0;
-  for (const c of id) h = (h * 31 + c.charCodeAt(0)) >>> 0;
-  return palette[h % palette.length];
 }
 
 function renderMe() {
@@ -201,25 +185,24 @@ function renderLeaderboard() {
   const all = Object.values(players)
     .filter((p) => p && p.id)
     .sort((a, b) => (b.score || 0) - (a.score || 0) || (a.joinedAt || 0) - (b.joinedAt || 0));
-  const top = all.slice(0, 10);
   const list = $("#lb-list");
   list.innerHTML = "";
   if (!all.length) {
     list.appendChild(el("p", "muted small", "No players yet — be the first!"));
-    return;
+  } else {
+    all.slice(0, 10).forEach((p, i) => {
+      const mine = p.id === me.id;
+      const online = (p.lastSeen || 0) > cutoff;
+      const row = el("div", "lb-row" + (mine ? " mine" : ""));
+      row.innerHTML =
+        `<span class="lb-rank">${i + 1}</span>` +
+        avatarHtml(p, 26) +
+        `<span class="lb-name">${escapeHtml(p.username)}${mine ? '<span class="you-tag">you</span>' : ""}</span>` +
+        `<span class="lb-online ${online ? "" : "off"}">●</span>` +
+        `<span class="lb-score">⭐ ${p.score || 0}</span>`;
+      list.appendChild(row);
+    });
   }
-  top.forEach((p, i) => {
-    const mine = p.id === me.id;
-    const online = (p.lastSeen || 0) > cutoff;
-    const row = el("div", "lb-row" + (mine ? " mine" : ""));
-    row.innerHTML =
-      `<span class="lb-rank">${i + 1}</span>` +
-      avatarHtml(p, 26) +
-      `<span class="lb-name">${escapeHtml(p.username)}${mine ? '<span class="you-tag">you</span>' : ""}</span>` +
-      `<span class="lb-online ${online ? "" : "off"}">●</span>` +
-      `<span class="lb-score">⭐ ${p.score || 0}</span>`;
-    list.appendChild(row);
-  });
   const myRank = all.findIndex((p) => p.id === me.id);
   $("#my-rank").textContent =
     myRank >= 0
@@ -227,87 +210,74 @@ function renderLeaderboard() {
       : "Join the arena to rank up!";
 }
 
+function hintFor(word, t) {
+  if (!word) return null;
+  if (t >= HINT_2_AT && word.length > 1) {
+    return `💡 Hint: starts with "${word[0].toUpperCase()}", letter 2 is "${word[1].toUpperCase()}"`;
+  }
+  if (t >= HINT_1_AT) {
+    return `💡 Hint: starts with "${word[0].toUpperCase()}"`;
+  }
+  return null;
+}
+
 function renderStatus(ph) {
   const box = $("#status-box");
   box.innerHTML = "";
-  const drawer = drawerFor(ph.N);
-  const isDrawer = me.id === drawer?.id;
 
   if (ph.phase === "idle") {
     box.appendChild(el("div", "status-title", "🌍 Global Arena"));
-    box.appendChild(el("div", "muted", "The world's drawing room. Waiting for players…"));
+    box.appendChild(el("div", "muted", "The bot draws, you guess. Waiting for the first player…"));
     return;
   }
 
-  const roundEl = el("div", "status-round", `Turn ${ph.N + 1}`);
-  box.appendChild(roundEl);
+  box.appendChild(el("div", "status-round", `Turn ${ph.N + 1}`));
 
-  if (ph.phase === "picking") {
-    box.appendChild(el("div", "status-title", isDrawer ? "Pick a word to draw!" : `${drawer?.username || "Someone"} is picking a word…`));
-    if (isDrawer && !wordChoices) {
-      wordChoices = pickWords(3);
-      const choicesRow = el("div", "choices");
-      wordChoices.forEach((w) => {
-        const b = el("button", "choice-btn", w);
-        b.addEventListener("click", () => pickWord(w));
-        choicesRow.appendChild(b);
-      });
-      box.appendChild(choicesRow);
-    }
-  } else if (ph.phase === "picking-timeout") {
-    box.appendChild(el("div", "status-title", isDrawer ? "Hurry! Pick a word" : `${drawer?.username || "The drawer"} missed the pick — choosing one for them…`));
-    if (isDrawer && !wordChoices) {
-      wordChoices = pickWords(3);
-      const choicesRow = el("div", "choices");
-      wordChoices.forEach((w) => {
-        const b = el("button", "choice-btn", w);
-        b.addEventListener("click", () => pickWord(w));
-        choicesRow.appendChild(b);
-      });
-      box.appendChild(choicesRow);
-    }
+  if (ph.phase === "picking" || ph.phase === "picking-timeout") {
+    box.appendChild(el("div", "status-title", "🤖 The bot is choosing a word…"));
   } else if (ph.phase === "drawing") {
-    const word = ph.word;
-    const wEl = el("div", "status-word");
-    if (isDrawer) {
-      wEl.textContent = word;
-      wEl.className += " drawer-word";
-    } else {
-      wEl.textContent = maskWord(word);
-      wEl.className += " masked-word";
+    const t = ph.t / 1000;
+    box.appendChild(el("div", "status-title", "🤖 The bot is drawing…"));
+    const hint = hintFor(ph.word, t);
+    if (hint) box.appendChild(el("div", "hint-line", hint));
+    if (iGuessedTurn === ph.N) {
+      box.appendChild(el("div", "got-it", "✅ You got it! Watch the drawing finish…"));
     }
-    box.appendChild(el("div", "status-title", isDrawer ? "Draw this!" : `${drawer?.username || "Someone"} is drawing`));
-    box.appendChild(wEl);
-    if (!isDrawer) box.appendChild(el("div", "muted small", `${word.length} letters`));
   } else if (ph.phase === "intermission") {
-    const lastWord = ph.word || turnData.word;
+    const w = ph.word || turnData.word;
     box.appendChild(el("div", "status-title", "The word was"));
-    box.appendChild(el("div", "status-word drawer-word", lastWord || "?"));
-    box.appendChild(el("div", "muted small", "Next turn in a moment…"));
+    box.appendChild(el("div", "status-word drawer-word", w || "?"));
   }
 
   const timer = $("#q-time");
   timer.textContent = Math.ceil(ph.timeLeft) + "s";
-  const fill = $("#q-progress");
   const total =
-    ph.phase === "drawing"
-      ? game.turnDuration
-      : ph.phase === "intermission"
-      ? Math.max(1, game.intermission)
-      : game.pickDuration;
+    ph.phase === "intermission" ? Math.max(1, game.intermission) : game.turnDuration;
+  const fill = $("#q-progress");
   fill.style.width = Math.max(0, Math.min(100, (ph.timeLeft / total) * 100)) + "%";
   $("#turn-label").textContent = `Turn ${ph.N + 1}`;
+
+  // guess input availability
+  const input = $("#guess-input");
+  const btn = $("#guess-btn");
+  const canGuess = ph.phase === "drawing" && iGuessedTurn !== ph.N;
+  input.disabled = !canGuess;
+  btn.disabled = !canGuess;
+  input.placeholder = canGuess
+    ? "What is the bot drawing?"
+    : ph.phase === "drawing"
+    ? "You got it — nice! 🎉"
+    : "Wait for the next drawing…";
 }
 
 function renderChat() {
   const list = $("#chat-list");
   list.innerHTML = "";
-  const msgs = chatLog;
-  if (!msgs.length) {
-    list.appendChild(el("div", "muted small center", "Guesses appear here. Get the word right to score!"));
+  if (!chatLog.length) {
+    list.appendChild(el("div", "muted small center", "Guesses appear here. What's the bot drawing?"));
     return;
   }
-  msgs.forEach((m) => {
+  chatLog.forEach((m) => {
     const row = el("div", "chat-msg " + (m.kind || ""));
     if (m.kind === "correct") {
       row.innerHTML = `<b>${escapeHtml(m.from)}</b> got it! +${m.points}`;
@@ -321,74 +291,13 @@ function renderChat() {
   list.scrollTop = list.scrollHeight;
 }
 
-let chatLog = [];
-
 function pushChat(m) {
   chatLog.push(m);
   if (chatLog.length > 60) chatLog = chatLog.slice(-60);
   renderChat();
 }
 
-// ── canvas wiring ───────────────────────────────────────────────────────────
-function makeCanvas() {
-  if (canvas) return;
-  canvas = createCanvas($("#canvas-host"), {
-    drawable: () => {
-      const ph = computePhase();
-      const drawer = drawerFor(ph.N);
-      return ph.phase === "drawing" && me.id === drawer?.id;
-    },
-    onStroke: (seg) => {
-      strokeBuffer.push(seg);
-      if (!strokeFlushTimer) {
-        strokeFlushTimer = setTimeout(flushStrokes, 300);
-      }
-    },
-    onClear: () => {
-      const N = currentTurn();
-      dbWrite(`${P}/canvas/${N}/clear`, Date.now()).catch(() => {});
-    },
-  });
-  canvas.refresh();
-}
-
-function flushStrokes() {
-  strokeFlushTimer = null;
-  if (!strokeBuffer.length) return;
-  const segs = strokeBuffer;
-  strokeBuffer = [];
-  const N = currentTurn();
-  const id = crypto.randomUUID();
-  localStrokeIds.add(id);
-  dbWrite(`${P}/canvas/${N}/strokes/${id}`, { segments: segs, at: Date.now() }).catch((e) => {
-    console.warn("[vv] stroke write failed:", e);
-    // restore to buffer for retry on next flush cycle
-    strokeBuffer = segs.concat(strokeBuffer);
-  });
-}
-
-function clearCanvasUi() {
-  canvas?.clearRemote();
-  appliedStrokes = new Set();
-  localStrokeIds = new Set();
-}
-
 // ── actions ─────────────────────────────────────────────────────────────────
-async function pickWord(word) {
-  const N = currentTurn();
-  const res = await fetch("/api/pick-word", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ uid: me.id, turn: N, word }),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    console.warn("[vv] pick-word failed:", data.error);
-    return;
-  }
-  wordChoices = null;
-}
-
 async function sendGuess() {
   const input = $("#guess-input");
   const text = input.value.trim();
@@ -402,9 +311,11 @@ async function sendGuess() {
   });
   const data = await res.json().catch(() => ({}));
   if (data.correct) {
-    pushChat({ from: me.username, kind: "correct", points: data.points, text: "" });
-    me.score = (data.score ?? me.score);
+    iGuessedTurn = N;
+    me.score = data.score ?? me.score;
+    pushChat({ from: me.username, kind: "correct", points: data.points });
     renderMe();
+    renderStatus(computePhase());
   } else if (data.error) {
     pushChat({ from: "system", kind: "system", text: data.error });
   } else {
@@ -412,21 +323,22 @@ async function sendGuess() {
   }
 }
 
-async function autoPickIfNeeded(ph) {
-  if (ph.phase !== "picking-timeout" || autoPickPosted) return;
-  autoPickPosted = true;
+async function ensureWord(N) {
+  if (ensurePosted) return;
+  ensurePosted = true;
   try {
-    await fetch("/api/auto-pick", {
+    await fetch("/api/ensure-word", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ turn: ph.N }),
+      body: JSON.stringify({ turn: N }),
     });
   } catch (e) {
-    console.warn("[vv] auto-pick failed:", e);
+    console.warn("[vv] ensure-word failed:", e);
+    ensurePosted = false;
   }
 }
 
-// ── data loading / watching ─────────────────────────────────────────────────
+// ── data / watchers ─────────────────────────────────────────────────────────
 async function joinArena() {
   const res = await fetch("/api/join", {
     method: "POST",
@@ -444,93 +356,40 @@ async function joinArena() {
 }
 
 function watch(path, onData) {
-  const es = dbWatch(path, (rel, data) => {
-    onData(rel, data, es);
-  });
+  const es = dbWatch(path, (rel, data) => onData(rel, data));
   channels.push(es);
   return es;
 }
 
 async function loadTurnData(N) {
-  if (loadingTurn) return;
-  loadingTurn = true;
-  try {
-    const [wordRes, turnRes, guessRes, strokeRes] = await Promise.all([
-      dbRead(`${P}/words/${N}`),
-      dbRead(`${P}/turns/${N}`),
-      dbRead(`${P}/guesses/${N}`),
-      dbRead(`${P}/canvas/${N}/strokes`),
-    ]);
-    words[N] = wordRes || null;
-    turnData = {
-      N,
-      word: wordRes || null,
-      allGuessedAt: turnRes?.allGuessedAt || null,
-      guessed: turnRes?.guessed || {},
-      guesses: guessRes || {},
-    };
-    // Replay existing strokes
-    appliedStrokes = new Set();
-    localStrokeIds = new Set();
-    const strokes = strokeRes || {};
-    Object.keys(strokes)
-      .sort()
-      .forEach((id) => {
-        const s = strokes[id];
-        if (s?.segments?.length) {
-          s.segments.forEach((seg) => canvas?.drawRemoteStroke(seg));
-          appliedStrokes.add(id);
-        }
+  const [wordRes, turnRes, guessRes] = await Promise.all([
+    dbRead(`${P}/words/${N}`),
+    dbRead(`${P}/turns/${N}`),
+    dbRead(`${P}/guesses/${N}`),
+  ]);
+  words[N] = wordRes || null;
+  turnData = {
+    N,
+    word: wordRes || null,
+    allGuessedAt: turnRes?.allGuessedAt || null,
+    guessed: turnRes?.guessed || {},
+    guesses: guessRes || {},
+  };
+  chatLog = [];
+  Object.values(guessRes || {})
+    .sort((a, b) => a.at - b.at)
+    .slice(-20)
+    .forEach((g) => {
+      chatLog.push({
+        from: players[g.uid]?.username || "Player",
+        kind: g.correct ? "correct" : "normal",
+        text: g.correct ? "" : g.text,
+        points: g.points || 0,
       });
-    // Seed chat from recent guesses
-    chatLog = [];
-    Object.values(guessRes || {})
-      .sort((a, b) => a.at - b.at)
-      .slice(-20)
-      .forEach((g) => {
-        chatLog.push({
-          from: players[g.uid]?.username || "Player",
-          kind: g.correct ? "correct" : "normal",
-          text: g.correct ? "" : g.text,
-          points: g.points || 0,
-        });
-      });
-  } finally {
-    loadingTurn = false;
-  }
+    });
 }
 
-function clearCanvasForNewTurn() {
-  canvas?.clearRemote();
-  appliedStrokes = new Set();
-  localStrokeIds = new Set();
-}
-
-// ── main loop ───────────────────────────────────────────────────────────────
-function tick() {
-  const ph = computePhase();
-
-  // Turn changed? Load new turn data + resubscribe.
-  if (ph.N !== turnData.N) {
-    wordChoices = null;
-    autoPickPosted = false;
-    clearCanvasForNewTurn();
-    loadTurnData(ph.N).catch((e) => console.warn("[vv] loadTurnData:", e));
-    // (re)subscribe to per-turn streams for the new turn
-    setupTurnWatches(ph.N);
-  }
-
-  if (ph.phase === "picking" || ph.phase === "picking-timeout") {
-    autoPickIfNeeded(ph);
-  }
-
-  renderStatus(ph);
-  renderLeaderboard();
-  renderMe();
-  canvas?.refresh();
-}
-
-function setupTurnWatches(N) {
+function setupWatches() {
   channels.forEach((es) => es.close());
   channels = [];
 
@@ -553,62 +412,55 @@ function setupTurnWatches(N) {
     }
   });
 
-  watch(`${P}/words/${N}`, (rel, data) => {
-    words[N] = data || null;
-    if (data && turnData.N === N) {
-      turnData.word = data;
-      wordChoices = null;
-      // If we just picked (drawer) — refresh status immediately
+  // word watcher — covers current + next turns
+  watch(`${P}/words`, (rel, data) => {
+    if (rel === "/") {
+      words = data || {};
+    } else {
+      const N = parseInt(rel.split("/").filter(Boolean)[0], 10);
+      if (!isNaN(N)) words[N] = data || null;
+    }
+    if (turnData.N === currentTurn()) {
+      turnData.word = words[turnData.N] || null;
+      ensurePosted = false;
       renderStatus(computePhase());
     }
   });
+}
 
-  watch(`${P}/turns/${N}`, (rel, data) => {
+function setupTurnWatch(N) {
+  turnChannels.forEach((es) => es.close());
+  turnChannels = [];
+  const w = (path, onData) => {
+    const s = dbWatch(path, (rel, data) => onData(rel, data));
+    turnChannels.push(s);
+    return s;
+  };
+  w(`${P}/turns/${N}`, (rel, data) => {
     if (rel === "/" || rel === "/allGuessedAt") {
       turnData.allGuessedAt = data?.allGuessedAt ?? data ?? null;
-    } else if (rel.startsWith("/guessed")) {
-      turnData.guessed = { ...(turnData.guessed || {}), ...(data || {}) };
     }
   });
-
-  watch(`${P}/guesses/${N}`, (rel, data) => {
+  w(`${P}/guesses/${N}`, (rel, data) => {
     if (rel === "/") {
       turnData.guesses = data || {};
     } else {
       const uid = rel.split("/").filter(Boolean)[0];
       if (uid && data) {
         turnData.guesses[uid] = data;
-        const g = data;
         const from = players[uid]?.username || "Player";
-        if (g.correct) {
-          pushChat({ from, kind: "correct", points: g.points || 0 });
+        if (data.correct) {
+          pushChat({ from, kind: "correct", points: data.points || 0 });
         } else {
-          pushChat({ from, kind: "normal", text: g.text });
+          pushChat({ from, kind: "normal", text: data.text });
         }
       }
     }
-    // cap chat noise
     if (chatLog.length > 80) chatLog = chatLog.slice(-60);
-  });
-
-  watch(`${P}/canvas/${N}/strokes`, (rel, data) => {
-    if (rel === "/") return; // full snapshot — ignore (we load via GET)
-    const id = rel.split("/").filter(Boolean)[0];
-    if (!id || appliedStrokes.has(id) || localStrokeIds.has(id)) return;
-    if (data?.segments?.length) {
-      data.segments.forEach((seg) => canvas?.drawRemoteStroke(seg));
-      appliedStrokes.add(id);
-    }
-  });
-
-  watch(`${P}/canvas/${N}/clear`, (rel, data) => {
-    if (rel === "/") {
-      canvas?.clearRemote();
-      appliedStrokes = new Set();
-    }
   });
 }
 
+// ── heartbeat + clock ───────────────────────────────────────────────────────
 async function heartbeat() {
   try {
     await dbUpdate(`${P}/players/${me.id}`, { lastSeen: Date.now(), online: true });
@@ -621,12 +473,53 @@ async function syncClock() {
   try {
     const res = await fetch("/api/time");
     const data = await res.json();
-    if (data.now) {
-      offset = data.now - Date.now();
-      clockOffsetKnown = true;
-    }
+    if (data.now) offset = data.now - Date.now();
   } catch (e) {
     console.warn("[vv] clock sync failed:", e);
+  }
+}
+
+// ── main loop (rAF) ─────────────────────────────────────────────────────────
+let lastTurn = -1;
+
+function frame() {
+  requestAnimationFrame(frame);
+  const ph = computePhase();
+
+  // Turn changed → load new turn, re-watch per-turn data
+  if (ph.N !== lastTurn && ph.N >= 0) {
+    lastTurn = ph.N;
+    iGuessedTurn = -1;
+    ensurePosted = false;
+    loadTurnData(ph.N).catch((e) => console.warn("[vv] loadTurnData:", e));
+    setupTurnWatch(ph.N);
+  }
+
+  // The bot needs a word — ask the worker if the turn is fresh
+  if (ph.N >= 0 && !words[ph.N] && ph.t >= 1200 && !ensurePosted) {
+    ensureWord(ph.N);
+  }
+
+  // Canvas: animate the bot's drawing
+  if (canvas && ph.phase === "drawing" && ph.word) {
+    const t = ph.t / 1000;
+    const elapsed = Math.max(0, t - DRAW_START);
+    canvas.render(DRAWINGS[ph.word] || null, elapsed, DRAW_END - DRAW_START);
+  } else if (canvas && ph.phase === "intermission") {
+    // show the finished drawing
+    const w = ph.word || turnData.word;
+    if (w) canvas.render(DRAWINGS[w] || null, 999, 100);
+  } else if (canvas) {
+    canvas.clear();
+  }
+
+  // DOM updates ~5x/sec
+  const tNow = performance.now();
+  if (tNow - lastDomUpdate > 200) {
+    lastDomUpdate = tNow;
+    renderStatus(ph);
+    renderLeaderboard();
+    renderMe();
   }
 }
 
@@ -635,29 +528,25 @@ async function boot() {
   setScreen("loading");
   $("#loading-msg").textContent = "Joining the global arena…";
   try {
-    const identity = await resolveIdentity();
-    me = { ...identity };
+    me = { ...(await resolveIdentity()) };
     await syncClock();
-    const data = await joinArena();
-    game = { ...GAME_DEFAULTS, ...(data.game || {}) };
-    players = data.players || {};
-    me.score = players[me.id]?.score || 0;
-
+    await joinArena();
     renderMe();
-    setupTurnWatches(currentTurn());
-    const N = currentTurn();
-    if (N >= 0) await loadTurnData(N);
-    makeCanvas();
-    canvas.refresh();
 
-    // beat: heartbeat + clock resync
+    setupWatches();
+    const N = currentTurn();
+    if (N >= 0) {
+      lastTurn = N;
+      await loadTurnData(N);
+      setupTurnWatch(N);
+    }
+    canvas = createBotCanvas($("#canvas-host"));
+
     setInterval(heartbeat, 30000);
     setInterval(syncClock, 60000);
-    setInterval(tick, 400);
-    tick();
+    requestAnimationFrame(frame);
 
     setScreen("game");
-    $("#loading-msg").textContent = "Connecting…";
   } catch (e) {
     console.error("[vv] boot failed:", e);
     setScreen("error");

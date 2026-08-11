@@ -19,9 +19,9 @@ const FILES = {
   "app.js": "app.js",
   "canvas.js": "canvas.js",
   "discord.js": "discord.js",
+  "drawings.js": "drawings.js",
   "firebase.js": "firebase.js",
   "support.js": "support.js",
-  "words.js": "words.js",
   "vendor/discord-sdk.mjs": "vendor/discord-sdk.mjs",
   "privacy.html": "privacy.html",
   "terms.html": "terms.html",
@@ -45,6 +45,21 @@ for (const [key, file] of Object.entries(FILES)) {
   //  $& / $' sequences inside the bundle as special patterns.)
   worker = worker.replace(placeholder, () => JSON.stringify(content));
 }
+
+// Inject the bot's vocabulary (drawing keys) into the worker's WORDS const.
+const drawingsSrc = read("drawings.js");
+const wordsMatch = drawingsSrc.match(/export const DRAWINGS = \{([\s\S]*?)\n\};/);
+if (!wordsMatch) {
+  console.error("Could not parse drawings.js DRAWINGS keys");
+  process.exit(1);
+}
+const botWords = [...wordsMatch[1].matchAll(/^  "?([\w\s-]+?)"?: \[/gm)].map((m) => m[1].trim());
+if (!worker.includes("__DRAWING_WORDS__")) {
+  console.error("Missing __DRAWING_WORDS__ placeholder in worker.js");
+  process.exit(1);
+}
+worker = worker.replace("__DRAWING_WORDS__", () => JSON.stringify(botWords));
+console.log(`Bot vocabulary: ${botWords.length} words`);
 
 // Any leftover placeholders?
 const leftovers = worker.match(/__[A-Z0-9_]+__/g) || [];

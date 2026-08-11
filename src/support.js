@@ -10,7 +10,6 @@
 import { discordSdk, inDiscordFrame } from "./discord.js";
 
 const SUPPORT_URL = "https://walusimbi-leon1.github.io/voice-support/";
-const SGSS_URL = "https://walusimbi-leon1.github.io/sgss-bible/";
 
 function openExternalUrl(url) {
   // Plain browser: native target="_blank" behavior is exactly right.
@@ -27,22 +26,11 @@ function openExternalUrl(url) {
 }
 
 function wireLinks() {
-  const supportLinks = document.querySelectorAll(
-    "a.support-link, a.support-chip, a[href='/support'], a[href='" + SUPPORT_URL + "']"
-  );
-  supportLinks.forEach((a) => {
+  document.querySelectorAll("a.support-link, a.support-chip").forEach((a) => {
     a.addEventListener("click", (e) => {
       if (!inDiscordFrame) return;
       e.preventDefault();
       openExternalUrl(SUPPORT_URL);
-    });
-  });
-  const sgssLinks = document.querySelectorAll("a.sgss-link, a[href='" + SGSS_URL + "']");
-  sgssLinks.forEach((a) => {
-    a.addEventListener("click", (e) => {
-      if (!inDiscordFrame) return;
-      e.preventDefault();
-      openExternalUrl(SGSS_URL);
     });
   });
 }
